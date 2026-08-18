@@ -273,6 +273,16 @@ select.input { cursor: pointer; }
 .gh-link { color: var(--primary); font-size: 13px; text-decoration: none; display: inline-flex; align-items: center; gap: 5px; }
 .gh-link:hover { text-decoration: underline; }
 
+/* ---------- Team ---------- */
+.team-list { display: flex; flex-direction: column; gap: 4px; }
+.team-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius-sm); }
+.team-row:hover { background: var(--surface-2); }
+.team-name { flex: 1; font-size: 14px; font-weight: 500; display: flex; flex-direction: column; }
+.team-del { color: var(--text-faint); }
+.team-del:hover { background: rgba(239,68,68,.14); color: #fca5a5; }
+.team-add { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; }
+@media (max-width: 560px) { .team-add { grid-template-columns: 1fr; } }
+
 /* ---------- Balance reviews ---------- */
 .balance-toolbar { display: flex; align-items: center; gap: 16px; margin-bottom: 18px; flex-wrap: wrap; }
 .seg { display: inline-flex; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 3px; gap: 3px; }

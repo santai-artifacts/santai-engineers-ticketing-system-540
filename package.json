@@ -1,6 +1,6 @@
 {
   "name": "tracktile",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Team ticket system with GitHub integration",
   "type": "module",
   "scripts": {

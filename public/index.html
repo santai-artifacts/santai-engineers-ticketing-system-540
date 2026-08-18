@@ -49,6 +49,7 @@
       </div>
       <div class="topbar-right">
         <button id="new-ticket-btn" class="btn btn-primary">+ New ticket</button>
+        <button id="team-btn" class="btn btn-ghost" title="Manage team">👥</button>
         <button id="settings-btn" class="btn btn-ghost" title="Settings">⚙</button>
         <div class="me" id="me-chip">
           <span class="avatar" id="me-avatar"></span>
@@ -188,6 +189,26 @@
       <div class="modal-foot modal-foot-split">
         <button id="bal-auto-all" class="btn">⚡ Auto-assign all</button>
         <button class="btn btn-primary" data-close-balance>Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Team modal -->
+  <div id="team-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-head">
+        <h2>Team members</h2>
+        <button class="btn-icon" data-close-team>✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="team-list" class="team-list"></div>
+        <h3 class="section-title">Add a member</h3>
+        <div class="team-add">
+          <input id="tm-username" class="input" placeholder="username" autocomplete="off" />
+          <input id="tm-display" class="input" placeholder="Full name" autocomplete="off" />
+          <button id="tm-add" class="btn btn-primary">Add</button>
+        </div>
+        <p id="team-error" class="error-text"></p>
       </div>
     </div>
   </div>

@@ -98,6 +98,17 @@ app.post("/api/me/github", async (c) => {
   return c.json(db.query("SELECT * FROM users WHERE id = ?").get(me.id));
 });
 
+app.delete("/api/users/:id", (c) => {
+  const me = currentUser(c);
+  const id = Number(c.req.param("id"));
+  if (me && me.id === id) return c.json({ error: "You can't remove yourself while signed in. Switch users first." }, 400);
+  const u = db.query("SELECT id FROM users WHERE id = ?").get(id);
+  if (!u) return c.json({ error: "Not found" }, 404);
+  // Tickets/comments/assignments reference users with ON DELETE SET NULL, so they survive.
+  db.query("DELETE FROM users WHERE id = ?").run(id);
+  return c.json({ ok: true });
+});
+
 app.post("/api/logout", (c) => {
   setCookie(c, "uid", "", { path: "/", maxAge: 0 });
   return c.json({ ok: true });

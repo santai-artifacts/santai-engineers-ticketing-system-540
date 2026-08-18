@@ -572,6 +572,12 @@ function wireChrome() {
     finally { btn.disabled = false; btn.textContent = "↓ Import issues"; }
   };
 
+  // team management
+  $("#team-btn").onclick = openTeam;
+  $$("[data-close-team]").forEach((b) => (b.onclick = () => $("#team-modal").classList.add("hidden")));
+  $("#tm-add").onclick = addMember;
+  $("#tm-display").onkeydown = (e) => { if (e.key === "Enter") addMember(); };
+
   // balance reviews
   $("#balance-btn").onclick = () => openBalance();
   $$("[data-close-balance]").forEach((b) => (b.onclick = () => $("#balance-modal").classList.add("hidden")));
@@ -589,6 +595,54 @@ function wireChrome() {
       if (!$(id).classList.contains("hidden")) { $(id).classList.add("hidden"); break; }
     }
   });
+}
+
+// ---------- team management ----------
+async function openTeam() {
+  await loadUsers();
+  $("#tm-username").value = ""; $("#tm-display").value = ""; $("#team-error").textContent = "";
+  renderTeam();
+  $("#team-modal").classList.remove("hidden");
+}
+
+function renderTeam() {
+  $("#team-list").innerHTML = state.users
+    .map((u) => `
+      <div class="team-row">
+        <span class="avatar avatar-sm" style="background:${u.color}">${initials(u.display_name)}</span>
+        <span class="team-name">${esc(u.display_name)}
+          <span class="load-handle">@${esc(u.username)}${u.github_login ? ` · GitHub @${esc(u.github_login)}` : ""}</span>
+        </span>
+        ${u.id === state.me.id
+          ? `<span class="tag">you</span>`
+          : `<button class="btn-icon team-del" data-id="${u.id}" title="Remove ${esc(u.display_name)}">✕</button>`}
+      </div>`)
+    .join("");
+  $$(".team-del").forEach((b) => (b.onclick = () => removeMember(Number(b.dataset.id))));
+}
+
+async function addMember() {
+  const username = $("#tm-username").value;
+  const display_name = $("#tm-display").value;
+  try {
+    await api("/api/users", { method: "POST", body: { username, display_name } });
+    $("#tm-username").value = ""; $("#tm-display").value = ""; $("#team-error").textContent = "";
+    await loadUsers();
+    renderTeam();
+    toast("Member added");
+  } catch (e) { $("#team-error").textContent = e.message; }
+}
+
+async function removeMember(id) {
+  const u = state.users.find((x) => x.id === id);
+  if (!confirm(`Remove ${u ? u.display_name : "this member"}? Their tickets and comments stay, but become unassigned.`)) return;
+  try {
+    await api(`/api/users/${id}`, { method: "DELETE" });
+    await loadUsers();
+    await loadTickets(); // reflect now-unassigned tickets
+    renderTeam();
+    toast("Member removed");
+  } catch (e) { $("#team-error").textContent = e.message; }
 }
 
 // ---------- balance reviews ----------
