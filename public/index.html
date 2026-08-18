@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tracktile — Team Ticket Tracker</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <!-- Login gate -->
+  <div id="login" class="login-screen">
+    <div class="login-card">
+      <div class="brand">
+        <span class="brand-mark">◧</span>
+        <span class="brand-name">Tracktile</span>
+      </div>
+      <p class="login-sub">Team ticket tracking with GitHub sync.</p>
+
+      <div class="login-body">
+        <label class="field-label">Sign in as a team member</label>
+        <div class="login-row">
+          <select id="login-select" class="input"></select>
+          <button id="login-btn" class="btn btn-primary">Enter</button>
+        </div>
+        <div class="divider"><span>or add yourself</span></div>
+        <div class="new-user">
+          <input id="new-username" class="input" placeholder="username" autocomplete="off" />
+          <input id="new-display" class="input" placeholder="Full name" autocomplete="off" />
+          <button id="new-user-btn" class="btn">Create</button>
+        </div>
+        <p id="login-error" class="error-text"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main app -->
+  <div id="app" class="app hidden">
+    <header class="topbar">
+      <div class="topbar-left">
+        <span class="brand-mark">◧</span>
+        <span class="brand-name">Tracktile</span>
+        <span id="gh-pill" class="pill pill-muted" title="GitHub connection status">GitHub: checking…</span>
+      </div>
+      <div class="topbar-search">
+        <input id="search" class="input search-input" placeholder="Search tickets…" />
+      </div>
+      <div class="topbar-right">
+        <button id="new-ticket-btn" class="btn btn-primary">+ New ticket</button>
+        <button id="settings-btn" class="btn btn-ghost" title="Settings">⚙</button>
+        <div class="me" id="me-chip">
+          <span class="avatar" id="me-avatar"></span>
+          <span id="me-name"></span>
+          <button id="logout-btn" class="btn-link">Switch</button>
+        </div>
+      </div>
+    </header>
+
+    <div class="toolbar">
+      <div class="filters">
+        <label class="field-label">Assignee</label>
+        <select id="filter-assignee" class="input input-sm"><option value="">Everyone</option></select>
+        <label class="field-label">Priority</label>
+        <select id="filter-priority" class="input input-sm">
+          <option value="">All</option>
+          <option value="urgent">Urgent</option>
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
+        </select>
+      </div>
+      <div id="counts" class="counts"></div>
+    </div>
+
+    <main id="board" class="board"></main>
+  </div>
+
+  <!-- Ticket modal -->
+  <div id="ticket-modal" class="modal-overlay hidden">
+    <div class="modal" id="ticket-modal-inner"></div>
+  </div>
+
+  <!-- New ticket modal -->
+  <div id="new-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-head">
+        <h2>New ticket</h2>
+        <button class="btn-icon" data-close-new>✕</button>
+      </div>
+      <div class="modal-body">
+        <label class="field-label">Title</label>
+        <input id="nt-title" class="input" placeholder="Short summary of the issue" />
+        <label class="field-label">Description</label>
+        <textarea id="nt-desc" class="input" rows="4" placeholder="Steps to reproduce, context, links…"></textarea>
+        <div class="grid-2">
+          <div>
+            <label class="field-label">Status</label>
+            <select id="nt-status" class="input">
+              <option value="backlog">Backlog</option>
+              <option value="todo">To do</option>
+              <option value="in_progress">In progress</option>
+              <option value="done">Done</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label">Priority</label>
+            <select id="nt-priority" class="input">
+              <option value="low">Low</option>
+              <option value="medium" selected>Medium</option>
+              <option value="high">High</option>
+              <option value="urgent">Urgent</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label">Assignee</label>
+            <select id="nt-assignee" class="input"><option value="">Unassigned</option></select>
+          </div>
+          <div>
+            <label class="field-label">Labels (comma-separated)</label>
+            <input id="nt-labels" class="input" placeholder="bug, ui" />
+          </div>
+        </div>
+        <p id="nt-error" class="error-text"></p>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" data-close-new>Cancel</button>
+        <button id="nt-create" class="btn btn-primary">Create ticket</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings modal -->
+  <div id="settings-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-head">
+        <h2>GitHub integration</h2>
+        <button class="btn-icon" data-close-settings>✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="gh-status-box" class="status-box"></div>
+        <label class="field-label">Target repository</label>
+        <input id="gh-repo" class="input" placeholder="owner/repo  (e.g. octocat/hello-world)" />
+        <p class="hint">Tickets you push become issues in this repo, and you can import its issues as tickets.</p>
+        <p id="gh-error" class="error-text"></p>
+      </div>
+      <div class="modal-foot modal-foot-split">
+        <button id="gh-import" class="btn">↓ Import issues</button>
+        <div>
+          <button class="btn" data-close-settings>Close</button>
+          <button id="gh-save" class="btn btn-primary">Save repo</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

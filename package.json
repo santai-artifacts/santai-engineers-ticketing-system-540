@@ -1,0 +1,12 @@
+{
+  "name": "tracktile",
+  "version": "1.0.0",
+  "description": "Team ticket system with GitHub integration",
+  "type": "module",
+  "scripts": {
+    "start": "bun run server.ts"
+  },
+  "dependencies": {
+    "hono": "^4.6.14"
+  }
+}
