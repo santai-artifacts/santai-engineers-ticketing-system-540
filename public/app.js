@@ -17,6 +17,22 @@ async function api(path, opts = {}) {
   return data;
 }
 
+async function uploadImages(ticketId, files) {
+  const fd = new FormData();
+  for (const f of files) fd.append("images", f);
+  const res = await fetch(`/api/tickets/${ticketId}/attachments`, { method: "POST", body: fd });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(data?.error || "Upload failed");
+  return data;
+}
+
+function openLightbox(src, alt = "") {
+  const lb = $("#lightbox");
+  $("#lightbox-img").src = src;
+  $("#lightbox-img").alt = alt;
+  lb.classList.remove("hidden");
+}
+
 let toastTimer;
 function toast(msg, isErr = false) {
   const t = $("#toast");
@@ -50,6 +66,10 @@ const PRIO_LABEL = { urgent: "Urgent", high: "High", medium: "Medium", low: "Low
 
 // ---------- boot ----------
 init();
+$("#lightbox").onclick = () => $("#lightbox").classList.add("hidden");
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("#lightbox").classList.contains("hidden")) $("#lightbox").classList.add("hidden");
+});
 async function init() {
   const me = await api("/api/me").catch(() => ({ user: null }));
   state.githubConnected = me.githubConnected;
@@ -246,6 +266,9 @@ function cardHTML(t) {
   const prBadge = prs && prs.length
     ? `<a class="pr-pill" href="${esc(prs[0].url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="${prs.length} open PR${prs.length > 1 ? "s" : ""} linked">⇄ PR${prs.length > 1 ? ` ×${prs.length}` : ` #${prs[0].number}`}</a>`
     : "";
+  const imgBadge = t.attachment_count
+    ? `<span class="img-badge" title="${t.attachment_count} image${t.attachment_count > 1 ? "s" : ""}">🖼 ${t.attachment_count}</span>`
+    : "";
   return `
     <article class="card" draggable="true" data-id="${t.id}">
       <div class="card-top">
@@ -255,7 +278,7 @@ function cardHTML(t) {
       </div>
       <div class="card-title">${esc(t.title)}</div>
       ${labels.length ? `<div class="card-labels">${labels.map((l) => `<span class="tag">${esc(l)}</span>`).join("")}</div>` : ""}
-      <div class="card-meta">${assignee}${prBadge}</div>
+      <div class="card-meta">${assignee}${prBadge}${imgBadge}</div>
     </article>`;
 }
 
@@ -326,6 +349,12 @@ async function openTicket(id) {
         <label class="field-label">Description</label>
         <div class="desc-view ${t.description ? "" : "empty"}" id="td-desc-view">${t.description ? esc(t.description) : "Add a description…"}</div>
         <textarea class="input hidden" id="td-desc-edit" rows="5">${esc(t.description)}</textarea>
+
+        <label class="field-label">Attachments</label>
+        <div class="thumb-grid" id="td-thumbs">${(t.attachments || []).map(thumbHTML).join("")}</div>
+        <label class="btn btn-sm file-btn">+ Add image
+          <input type="file" id="td-upload" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden />
+        </label>
 
         <div class="comments">
           <h3>Activity</h3>
@@ -405,6 +434,28 @@ async function openTicket(id) {
   $("#td-comment-send").onclick = sendComment;
   $("#td-comment").onkeydown = (e) => { if (e.key === "Enter") sendComment(); };
 
+  // attachments: view (lightbox), upload, delete
+  $$("#td-thumbs .thumb").forEach((th) => {
+    const aid = th.dataset.att;
+    th.querySelector("img").onclick = () => openLightbox(`/api/attachments/${aid}`, th.querySelector("img").alt);
+    th.querySelector(".thumb-del").onclick = async (e) => {
+      e.stopPropagation();
+      if (!confirm("Remove this image?")) return;
+      await api(`/api/attachments/${aid}`, { method: "DELETE" });
+      openTicket(id);
+      loadTickets();
+    };
+  });
+  $("#td-upload").onchange = async (e) => {
+    const files = e.target.files;
+    if (!files.length) return;
+    try {
+      await uploadImages(id, files);
+      openTicket(id);
+      loadTickets();
+    } catch (err) { toast(err.message, true); }
+  };
+
   const pushBtn = $("#td-push");
   if (pushBtn) pushBtn.onclick = async () => {
     if (!state.githubConnected) return toast("Connect GitHub first (Settings). The token is set when the app is deployed.", true);
@@ -432,6 +483,13 @@ function commentHTML(c) {
       </div>
     </div>`;
 }
+function thumbHTML(a) {
+  return `
+    <div class="thumb" data-att="${a.id}">
+      <img src="/api/attachments/${a.id}" alt="${esc(a.original || "attachment")}" loading="lazy" />
+      <button class="thumb-del" title="Remove image">✕</button>
+    </div>`;
+}
 function closeTicket() { $("#ticket-modal").classList.add("hidden"); }
 
 function fmt(s) {
@@ -455,9 +513,15 @@ function wireChrome() {
   $("#new-ticket-btn").onclick = () => {
     $("#nt-title").value = ""; $("#nt-desc").value = ""; $("#nt-labels").value = "";
     $("#nt-status").value = "backlog"; $("#nt-priority").value = "medium"; $("#nt-assignee").value = "";
+    $("#nt-images").value = ""; $("#nt-image-preview").innerHTML = "";
     $("#nt-error").textContent = "";
     $("#new-modal").classList.remove("hidden");
     $("#nt-title").focus();
+  };
+  $("#nt-images").onchange = (e) => {
+    $("#nt-image-preview").innerHTML = [...e.target.files]
+      .map((f) => `<div class="thumb"><img src="${URL.createObjectURL(f)}" alt="${esc(f.name)}" /></div>`)
+      .join("");
   };
   $$("[data-close-new]").forEach((b) => (b.onclick = () => $("#new-modal").classList.add("hidden")));
   $("#nt-create").onclick = async () => {
@@ -471,7 +535,12 @@ function wireChrome() {
     };
     if (!body.title.trim()) { $("#nt-error").textContent = "Title is required"; return; }
     try {
-      await api("/api/tickets", { method: "POST", body });
+      const t = await api("/api/tickets", { method: "POST", body });
+      const files = $("#nt-images").files;
+      if (files.length) {
+        try { await uploadImages(t.id, files); }
+        catch (e) { toast(`Ticket created, but image upload failed: ${e.message}`, true); }
+      }
       $("#new-modal").classList.add("hidden");
       await loadTickets();
       toast("Ticket created");

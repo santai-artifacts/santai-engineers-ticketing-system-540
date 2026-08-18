@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
-import db from "./db";
+import db, { uploadsDir } from "./db";
+import { unlink } from "node:fs/promises";
 import {
   githubConfigured,
   createIssue,
@@ -108,7 +109,8 @@ app.get("/api/tickets", (c) => {
     .query(
       `SELECT t.*,
               a.display_name AS assignee_name, a.color AS assignee_color, a.username AS assignee_username,
-              r.display_name AS reporter_name
+              r.display_name AS reporter_name,
+              (SELECT COUNT(*) FROM attachments at WHERE at.ticket_id = t.id) AS attachment_count
        FROM tickets t
        LEFT JOIN users a ON a.id = t.assignee_id
        LEFT JOIN users r ON r.id = t.reporter_id
@@ -131,7 +133,10 @@ app.get("/api/tickets/:id", (c) => {
        WHERE cm.ticket_id = ? ORDER BY cm.created_at ASC`
     )
     .all(id);
-  return c.json({ ...t, comments });
+  const attachments = db
+    .query("SELECT id, original, mime, size, created_at FROM attachments WHERE ticket_id = ? ORDER BY created_at ASC")
+    .all(id);
+  return c.json({ ...t, comments, attachments });
 });
 
 app.post("/api/tickets", async (c) => {
@@ -202,6 +207,59 @@ app.post("/api/tickets/:id/comments", async (c) => {
   db.query("INSERT INTO comments (ticket_id, user_id, body) VALUES (?, ?, ?)").run(id, me.id, body.trim());
   db.query("UPDATE tickets SET updated_at = datetime('now') WHERE id = ?").run(id);
   return c.json({ ok: true }, 201);
+});
+
+// ---------- API: attachments (images) ----------
+const IMG_TYPES: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+};
+const MAX_IMG = 8 * 1024 * 1024; // 8 MB
+
+app.post("/api/tickets/:id/attachments", async (c) => {
+  const me = currentUser(c);
+  if (!me) return c.json({ error: "Sign in first" }, 401);
+  const id = Number(c.req.param("id"));
+  if (!db.query("SELECT id FROM tickets WHERE id = ?").get(id)) return c.json({ error: "Not found" }, 404);
+
+  let form: FormData;
+  try { form = await c.req.formData(); } catch { return c.json({ error: "Expected multipart form data" }, 400); }
+  const files = form.getAll("images").filter((f): f is File => f instanceof File);
+  if (!files.length) return c.json({ error: "No image provided" }, 400);
+
+  const saved = [];
+  for (const file of files) {
+    if (!IMG_TYPES[file.type]) return c.json({ error: `Unsupported file type: ${file.type || "unknown"}. Images only.` }, 400);
+    if (file.size > MAX_IMG) return c.json({ error: `${file.name} is larger than 8 MB` }, 400);
+    const stored = `${crypto.randomUUID()}.${IMG_TYPES[file.type]}`;
+    await Bun.write(`${uploadsDir}/${stored}`, file);
+    const r = db
+      .query("INSERT INTO attachments (ticket_id, stored_name, original, mime, size, uploaded_by) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(id, stored, file.name, file.type, file.size, me.id);
+    saved.push({ id: Number(r.lastInsertRowid), original: file.name, mime: file.type, size: file.size });
+  }
+  db.query("UPDATE tickets SET updated_at = datetime('now') WHERE id = ?").run(id);
+  return c.json(saved, 201);
+});
+
+app.get("/api/attachments/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  const a = db.query("SELECT stored_name, mime FROM attachments WHERE id = ?").get(id) as any;
+  if (!a) return c.json({ error: "Not found" }, 404);
+  const file = Bun.file(`${uploadsDir}/${a.stored_name}`);
+  if (!(await file.exists())) return c.json({ error: "File missing" }, 404);
+  return new Response(file, { headers: { "Content-Type": a.mime, "Cache-Control": "private, max-age=86400" } });
+});
+
+app.delete("/api/attachments/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  const a = db.query("SELECT stored_name FROM attachments WHERE id = ?").get(id) as any;
+  if (!a) return c.json({ error: "Not found" }, 404);
+  db.query("DELETE FROM attachments WHERE id = ?").run(id);
+  try { await unlink(`${uploadsDir}/${a.stored_name}`); } catch {}
+  return c.json({ ok: true });
 });
 
 // ---------- API: GitHub integration ----------

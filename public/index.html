@@ -126,6 +126,9 @@
             <input id="nt-labels" class="input" placeholder="bug, ui" />
           </div>
         </div>
+        <label class="field-label">Attach images (optional)</label>
+        <input id="nt-images" class="input file-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple />
+        <div id="nt-image-preview" class="thumb-grid"></div>
         <p id="nt-error" class="error-text"></p>
       </div>
       <div class="modal-foot">
@@ -188,6 +191,9 @@
       </div>
     </div>
   </div>
+
+  <!-- Image lightbox -->
+  <div id="lightbox" class="lightbox hidden"><img id="lightbox-img" alt="" /></div>
 
   <div id="toast" class="toast hidden"></div>
 

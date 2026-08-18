@@ -6,6 +6,10 @@ const dbPath = process.env.DATABASE_URL || "./data/app.db";
 // Ensure the containing directory exists so a fresh deploy can't fail to open the DB.
 try { mkdirSync(dirname(dbPath), { recursive: true }); } catch {}
 
+// Uploaded images live next to the DB on the persistent data volume.
+export const uploadsDir = `${dirname(dbPath)}/uploads`;
+try { mkdirSync(uploadsDir, { recursive: true }); } catch {}
+
 const db = new Database(dbPath, { create: true });
 db.exec("PRAGMA journal_mode = WAL;");
 db.exec("PRAGMA foreign_keys = ON;");
@@ -45,6 +49,17 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS attachments (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_id   INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+    stored_name TEXT NOT NULL,
+    original    TEXT,
+    mime        TEXT NOT NULL,
+    size        INTEGER,
+    uploaded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
   );
 `);
 

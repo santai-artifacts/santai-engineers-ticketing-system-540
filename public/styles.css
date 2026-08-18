@@ -294,6 +294,29 @@ select.input { cursor: pointer; }
 .cand-title { font-size: 14px; font-weight: 500; }
 .cand-actions { display: flex; gap: 8px; align-items: center; }
 
+/* ---------- Attachments ---------- */
+.file-input { padding: 7px 10px; cursor: pointer; }
+.file-input::file-selector-button { font: inherit; font-size: 13px; margin-right: 10px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border-light); background: var(--surface-2); color: var(--text); cursor: pointer; }
+.thumb-grid { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.thumb { position: relative; width: 84px; height: 84px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); background: var(--surface-2); }
+.thumb img { width: 100%; height: 100%; object-fit: cover; cursor: zoom-in; display: block; }
+.thumb-del {
+  position: absolute; top: 3px; right: 3px; width: 20px; height: 20px;
+  border: none; border-radius: 50%; background: rgba(0,0,0,.62); color: #fff;
+  font-size: 12px; line-height: 1; cursor: pointer; opacity: 0; transition: opacity .12s;
+}
+.thumb:hover .thumb-del { opacity: 1; }
+.file-btn { display: inline-block; position: relative; margin-top: 4px; }
+.img-badge { font-size: 11px; color: var(--text-faint); margin-left: 4px; }
+
+.lightbox {
+  position: fixed; inset: 0; z-index: 80;
+  background: rgba(4, 6, 12, .9);
+  display: grid; place-items: center; padding: 30px; cursor: zoom-out;
+  animation: fade .15s ease;
+}
+.lightbox img { max-width: 92vw; max-height: 90vh; border-radius: 8px; box-shadow: var(--shadow); }
+
 .toast {
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
   background: var(--surface-3); color: var(--text);
