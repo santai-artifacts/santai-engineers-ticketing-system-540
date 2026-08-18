@@ -48,4 +48,20 @@ db.exec(`
   );
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS review_assignments (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    pr_number      INTEGER NOT NULL,
+    reviewer_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    reviewer_login TEXT NOT NULL,
+    assigned_at    TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+`);
+
+// ---- lightweight migrations ----
+const userCols = db.query("PRAGMA table_info(users)").all() as { name: string }[];
+if (!userCols.some((c) => c.name === "github_login")) {
+  db.exec("ALTER TABLE users ADD COLUMN github_login TEXT");
+}
+
 export default db;

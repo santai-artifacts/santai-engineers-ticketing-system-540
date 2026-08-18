@@ -33,8 +33,12 @@ const state = {
   tickets: [],
   githubConnected: false,
   githubRepo: null,
+  reviewPRs: [],
+  linkedByIssue: {},
+  ghSyncError: null,
   filter: { assignee: "", priority: "", search: "" },
 };
+let syncTimer = null;
 
 const COLUMNS = [
   { key: "backlog", label: "Backlog", color: "#64748b" },
@@ -101,6 +105,9 @@ async function enterApp() {
 
   wireChrome();
   await Promise.all([loadUsers(), loadTickets(), loadGithub()]);
+  syncGithub(); // pull PR state after the board is up
+  clearInterval(syncTimer);
+  syncTimer = setInterval(() => syncGithub(), 90000); // keep in sync every 90s
 }
 
 // ---------- data loads ----------
@@ -127,6 +134,31 @@ async function loadGithub() {
   } else {
     pill.className = "pill pill-off";
     pill.textContent = "GitHub: not connected";
+  }
+}
+
+async function syncGithub(showToast = false) {
+  const btn = $("#sync-btn");
+  if (btn) { btn.disabled = true; btn.textContent = "↻ Syncing…"; }
+  try {
+    const r = await api("/api/github/sync");
+    state.reviewPRs = r.reviewPRs || [];
+    state.linkedByIssue = r.linked || {};
+    state.ghSyncError = r.error || null;
+    if (r.autoMoved && r.autoMoved.length) {
+      await loadTickets(); // reflects server-side auto-advance
+      toast(`${r.autoMoved.length} ticket${r.autoMoved.length > 1 ? "s" : ""} moved to In progress (open PR found)`);
+    } else {
+      renderBoard();
+    }
+    if (showToast && !r.autoMoved?.length) {
+      toast(r.error ? r.error : `Synced · ${state.reviewPRs.length} awaiting your review`, !!r.error);
+    }
+  } catch (e) {
+    state.ghSyncError = e.message;
+    renderBoard();
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "↻ Sync"; }
   }
 }
 
@@ -160,8 +192,46 @@ function renderBoard() {
       </section>`;
   }).join("");
 
+  board.insertAdjacentHTML("beforeend", reviewColumnHTML());
   $("#counts").textContent = `${tickets.length} of ${state.tickets.length} tickets`;
   wireCards();
+}
+
+function reviewColumnHTML() {
+  let body;
+  if (!state.githubConnected) {
+    body = `<div class="empty-col">Connect GitHub (deploy with a token) to see review requests.</div>`;
+  } else if (!state.me.github_login) {
+    body = `<div class="empty-col">Set your GitHub username in ⚙ Settings to see PRs assigned to you.</div>`;
+  } else if (state.ghSyncError) {
+    body = `<div class="empty-col">${esc(state.ghSyncError)}</div>`;
+  } else if (!state.reviewPRs.length) {
+    body = `<div class="empty-col">🎉 Nothing awaiting your review.</div>`;
+  } else {
+    body = state.reviewPRs.map(prCardHTML).join("");
+  }
+  return `
+    <section class="column review-column">
+      <div class="col-head">
+        <span class="col-dot" style="background:#a855f7"></span>
+        Needs my review
+        <span class="col-count">${state.githubConnected && state.me.github_login ? state.reviewPRs.length : "–"}</span>
+      </div>
+      <div class="col-body">${body}</div>
+    </section>`;
+}
+
+function prCardHTML(pr) {
+  return `
+    <a class="card pr-card" href="${esc(pr.url)}" target="_blank" rel="noopener">
+      <div class="card-top">
+        <span class="id-chip">PR #${pr.number}</span>
+        ${pr.draft ? `<span class="tag">draft</span>` : ""}
+        <span class="gh-badge" style="margin-left:auto">${esc(pr.author || "")}</span>
+      </div>
+      <div class="card-title">${esc(pr.title)}</div>
+      <div class="card-meta"><span class="hint" style="margin:0">opened ${esc(fmt(pr.created_at))}</span></div>
+    </a>`;
 }
 
 function cardHTML(t) {
@@ -169,8 +239,12 @@ function cardHTML(t) {
   const assignee = t.assignee_name
     ? `<span class="avatar avatar-sm" style="background:${t.assignee_color}" title="${esc(t.assignee_name)}">${initials(t.assignee_name)}</span>`
     : `<span class="avatar avatar-sm" style="background:#334155" title="Unassigned">–</span>`;
+  const prs = t.github_number ? state.linkedByIssue[t.github_number] : null;
   const gh = t.github_number
-    ? `<a class="gh-badge" href="${esc(t.github_url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="View on GitHub">⎇ #${t.github_number}</a>`
+    ? `<a class="gh-badge" href="${esc(t.github_url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="View issue on GitHub">⎇ #${t.github_number}</a>`
+    : "";
+  const prBadge = prs && prs.length
+    ? `<a class="pr-pill" href="${esc(prs[0].url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="${prs.length} open PR${prs.length > 1 ? "s" : ""} linked">⇄ PR${prs.length > 1 ? ` ×${prs.length}` : ` #${prs[0].number}`}</a>`
     : "";
   return `
     <article class="card" draggable="true" data-id="${t.id}">
@@ -181,7 +255,7 @@ function cardHTML(t) {
       </div>
       <div class="card-title">${esc(t.title)}</div>
       ${labels.length ? `<div class="card-labels">${labels.map((l) => `<span class="tag">${esc(l)}</span>`).join("")}</div>` : ""}
-      <div class="card-meta">${assignee}</div>
+      <div class="card-meta">${assignee}${prBadge}</div>
     </article>`;
 }
 
@@ -375,6 +449,7 @@ function wireChrome() {
   $("#search").oninput = (e) => { state.filter.search = e.target.value; renderBoard(); };
 
   $("#logout-btn").onclick = async () => { await api("/api/logout", { method: "POST" }); location.reload(); };
+  $("#sync-btn").onclick = () => syncGithub(true);
 
   // new ticket
   $("#new-ticket-btn").onclick = () => {
@@ -428,13 +503,117 @@ function wireChrome() {
     finally { btn.disabled = false; btn.textContent = "↓ Import issues"; }
   };
 
+  // balance reviews
+  $("#balance-btn").onclick = () => openBalance();
+  $$("[data-close-balance]").forEach((b) => (b.onclick = () => $("#balance-modal").classList.add("hidden")));
+  $$("#bal-window .seg-btn").forEach((b) => (b.onclick = () => {
+    $$("#bal-window .seg-btn").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+    loadBalance(b.dataset.win);
+  }));
+  $("#bal-auto-all").onclick = autoAssignAll;
+
   // esc closes topmost modal
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
-    for (const id of ["#ticket-modal", "#new-modal", "#settings-modal"]) {
+    for (const id of ["#ticket-modal", "#new-modal", "#settings-modal", "#balance-modal"]) {
       if (!$(id).classList.contains("hidden")) { $(id).classList.add("hidden"); break; }
     }
   });
+}
+
+// ---------- balance reviews ----------
+let balState = { window: "24h", load: [], candidates: [] };
+
+function openBalance() {
+  if (!state.githubConnected) {
+    toast("Connect GitHub (deploy with a token) to assign reviewers.", true);
+  }
+  $("#bal-error").textContent = "";
+  $("#balance-modal").classList.remove("hidden");
+  loadBalance(balState.window);
+}
+
+async function loadBalance(win) {
+  balState.window = win;
+  $("#bal-load").innerHTML = `<p class="hint">Loading…</p>`;
+  $("#bal-candidates").innerHTML = "";
+  try {
+    const r = await api(`/api/reviews/load?window=${win}`);
+    balState.load = r.load || [];
+    balState.candidates = r.candidates || [];
+    renderBalance();
+  } catch (e) {
+    $("#bal-error").textContent = e.message;
+  }
+}
+
+function renderBalance() {
+  const max = Math.max(1, ...balState.load.map((u) => u.count));
+  const eligible = balState.load.filter((u) => u.github_login);
+  $("#bal-load").innerHTML = balState.load.length
+    ? balState.load.map((u) => `
+        <div class="load-row ${u.github_login ? "" : "load-dim"}">
+          <span class="avatar avatar-sm" style="background:${u.color}">${initials(u.display_name)}</span>
+          <span class="load-name">${esc(u.display_name)}${u.github_login ? `<span class="load-handle">@${esc(u.github_login)}</span>` : `<span class="load-handle load-warn">no GitHub username</span>`}</span>
+          <span class="load-bar"><span class="load-fill" style="width:${(u.count / max) * 100}%"></span></span>
+          <span class="load-count">${u.count}</span>
+        </div>`).join("")
+    : `<p class="hint">No team members yet.</p>`;
+
+  const options = eligible.map((u) => `<option value="${u.id}">${esc(u.display_name)} (${u.count})</option>`).join("");
+  $("#bal-candidates").innerHTML = balState.candidates.length
+    ? balState.candidates.map((pr) => `
+        <div class="cand-row" data-pr="${pr.number}">
+          <div class="cand-main">
+            <span class="id-chip">PR #${pr.number}</span> ${pr.draft ? `<span class="tag">draft</span>` : ""}
+            <span class="cand-title">${esc(pr.title)}</span>
+            <span class="hint" style="margin:0">by ${esc(pr.author || "?")}</span>
+          </div>
+          <div class="cand-actions">
+            <select class="input input-sm cand-pick">${options}</select>
+            <button class="btn btn-sm cand-assign" data-author="${esc(pr.author || "")}">Assign</button>
+          </div>
+        </div>`).join("")
+    : `<p class="hint">${state.githubConnected ? "Every open PR already has a reviewer. 🎉" : "Deploy with a GitHub token to see open PRs here."}</p>`;
+
+  $$(".cand-row").forEach((row) => {
+    const num = Number(row.dataset.pr);
+    row.querySelector(".cand-assign").onclick = () =>
+      assignReviewer(num, Number(row.querySelector(".cand-pick").value));
+  });
+}
+
+async function assignReviewer(pr_number, reviewer_id, silent = false) {
+  try {
+    const r = await api("/api/reviews/assign", { method: "POST", body: { pr_number, reviewer_id } });
+    if (!silent) toast(`PR #${pr_number} → ${r.reviewer.display_name}`);
+    return true;
+  } catch (e) {
+    if (!silent) $("#bal-error").textContent = e.message;
+    return false;
+  }
+}
+
+// Assign every reviewer-less PR to the least-loaded eligible member (server picks),
+// excluding each PR's author. Sequential so the ledger balances as it goes.
+async function autoAssignAll() {
+  const btn = $("#bal-auto-all");
+  btn.disabled = true; btn.textContent = "Assigning…";
+  $("#bal-error").textContent = "";
+  let done = 0;
+  for (const row of $$(".cand-row")) {
+    const num = Number(row.dataset.pr);
+    const author = row.querySelector(".cand-assign").dataset.author;
+    try {
+      await api("/api/reviews/assign", { method: "POST", body: { pr_number: num, exclude_login: author || null } });
+      done++;
+    } catch (e) { $("#bal-error").textContent = e.message; }
+  }
+  btn.disabled = false; btn.textContent = "⚡ Auto-assign all";
+  toast(done ? `Assigned ${done} PR${done > 1 ? "s" : ""} to the lightest-loaded reviewers` : "Nothing to assign", !done);
+  loadBalance(balState.window);
+  syncGithub();
 }
 
 function openSettings() {
@@ -447,6 +626,16 @@ function openSettings() {
     box.innerHTML = "GitHub token not set. Set the <b>GITHUB_TOKEN</b> secret and deploy — the value is injected into the live app. You can still configure the repo below.";
   }
   $("#gh-repo").value = state.githubRepo || "";
+  const loginEl = $("#gh-login");
+  loginEl.value = state.me.github_login || "";
+  loginEl.onblur = async () => {
+    if ((loginEl.value.trim() || "") === (state.me.github_login || "")) return;
+    try {
+      state.me = await api("/api/me/github", { method: "POST", body: { github_login: loginEl.value } });
+      toast("GitHub username saved");
+      syncGithub();
+    } catch (e) { $("#gh-error").textContent = e.message; }
+  };
   $("#gh-error").textContent = "";
   $("#settings-modal").classList.remove("hidden");
 }

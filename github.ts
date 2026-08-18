@@ -68,6 +68,24 @@ export async function updateIssueState(
   });
 }
 
+export async function listOpenPRs(owner: string, repo: string) {
+  return (await gh(
+    `/repos/${owner}/${repo}/pulls?state=open&per_page=100&sort=updated&direction=desc`
+  )) as any[];
+}
+
+export async function requestReviewers(
+  owner: string,
+  repo: string,
+  number: number,
+  reviewers: string[]
+) {
+  return gh(`/repos/${owner}/${repo}/pulls/${number}/requested_reviewers`, {
+    method: "POST",
+    body: JSON.stringify({ reviewers }),
+  });
+}
+
 export async function listIssues(owner: string, repo: string) {
   const issues = (await gh(
     `/repos/${owner}/${repo}/issues?state=all&per_page=100&sort=created&direction=desc`

@@ -6,6 +6,8 @@ import {
   createIssue,
   updateIssueState,
   listIssues,
+  listOpenPRs,
+  requestReviewers,
   GitHubError,
 } from "./github";
 
@@ -83,6 +85,16 @@ app.post("/api/users", async (c) => {
   const r = db.query("INSERT INTO users (username, display_name, color) VALUES (?, ?, ?)").run(uname, name, color);
   const user = db.query("SELECT * FROM users WHERE id = ?").get(Number(r.lastInsertRowid));
   return c.json(user, 201);
+});
+
+// Set the current user's GitHub handle (used to match review requests).
+app.post("/api/me/github", async (c) => {
+  const me = currentUser(c);
+  if (!me) return c.json({ error: "Sign in first" }, 401);
+  const { github_login } = await c.req.json<{ github_login: string }>();
+  const login = (github_login || "").trim().replace(/^@/, "");
+  db.query("UPDATE users SET github_login = ? WHERE id = ?").run(login || null, me.id);
+  return c.json(db.query("SELECT * FROM users WHERE id = ?").get(me.id));
 });
 
 app.post("/api/logout", (c) => {
@@ -265,6 +277,130 @@ app.post("/api/github/import", async (c) => {
       imported++;
     }
     return c.json({ imported, total: issues.length });
+  } catch (e) {
+    const err = e as GitHubError;
+    return c.json({ error: err.message }, (err.status as any) || 502);
+  }
+});
+
+// Sync with GitHub PRs: auto-advance tickets that have an open PR, and
+// surface the PRs awaiting the current user's review.
+app.get("/api/github/sync", async (c) => {
+  const me = currentUser(c);
+  const repo = getSetting("github_repo");
+  const base = { connected: githubConfigured(), repo, reviewPRs: [] as any[], linked: {} as Record<string, any[]>, autoMoved: [] as number[], login: me?.github_login || null };
+  if (!githubConfigured() || !repo) return c.json(base);
+
+  const [owner, name] = repo.split("/");
+  try {
+    const prs = await listOpenPRs(owner, name);
+
+    // Map issue number -> open PRs that declare they close/fix/resolve it.
+    const closingRe = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/gi;
+    const linked: Record<string, any[]> = {};
+    for (const pr of prs) {
+      const text = `${pr.title}\n${pr.body || ""}`;
+      const nums = new Set<number>();
+      let m: RegExpExecArray | null;
+      closingRe.lastIndex = 0;
+      while ((m = closingRe.exec(text))) nums.add(Number(m[1]));
+      for (const n of nums) {
+        (linked[n] ||= []).push({ number: pr.number, title: pr.title, url: pr.html_url, draft: pr.draft });
+      }
+    }
+
+    // Auto-advance any backlog/todo ticket that now has an open PR.
+    const autoMoved: number[] = [];
+    for (const issueNum of Object.keys(linked)) {
+      const rows = db.query("SELECT id, status FROM tickets WHERE github_number = ?").all(Number(issueNum)) as any[];
+      for (const t of rows) {
+        if (t.status === "backlog" || t.status === "todo") {
+          db.query("UPDATE tickets SET status = 'in_progress', updated_at = datetime('now') WHERE id = ?").run(t.id);
+          autoMoved.push(t.id);
+        }
+      }
+    }
+
+    // PRs where the current user is a requested reviewer.
+    let reviewPRs: any[] = [];
+    const login = me?.github_login;
+    if (login) {
+      reviewPRs = prs
+        .filter((pr) => (pr.requested_reviewers || []).some((r: any) => (r.login || "").toLowerCase() === login.toLowerCase()))
+        .map((pr) => ({ number: pr.number, title: pr.title, url: pr.html_url, author: pr.user?.login, draft: pr.draft, created_at: pr.created_at }));
+    }
+
+    return c.json({ ...base, linked, autoMoved, reviewPRs, login: login || null });
+  } catch (e) {
+    const err = e as GitHubError;
+    return c.json({ ...base, error: err.message });
+  }
+});
+
+// Review load per member + PRs that currently have no reviewer.
+app.get("/api/reviews/load", async (c) => {
+  const w = c.req.query("window") === "7d" ? "7d" : "24h";
+  const since = w === "7d" ? "-7 days" : "-1 day";
+  const load = db
+    .query(
+      `SELECT u.id, u.display_name, u.color, u.github_login,
+              (SELECT COUNT(*) FROM review_assignments ra
+               WHERE ra.reviewer_id = u.id AND ra.assigned_at >= datetime('now', ?)) AS count
+       FROM users u ORDER BY count DESC, u.display_name`
+    )
+    .all(since) as any[];
+
+  let candidates: any[] = [];
+  const repo = getSetting("github_repo");
+  if (githubConfigured() && repo) {
+    const [owner, name] = repo.split("/");
+    try {
+      const prs = await listOpenPRs(owner, name);
+      candidates = prs
+        .filter((p) => !(p.requested_reviewers || []).length)
+        .map((p) => ({ number: p.number, title: p.title, url: p.html_url, author: p.user?.login, draft: p.draft }));
+    } catch {}
+  }
+  return c.json({ window: w, load, candidates, connected: githubConfigured(), repo });
+});
+
+// Assign a reviewer to a PR: least-loaded eligible member unless one is named.
+app.post("/api/reviews/assign", async (c) => {
+  const { pr_number, reviewer_id, exclude_login } = await c.req.json<any>();
+  if (!pr_number) return c.json({ error: "pr_number is required" }, 400);
+  const repo = getSetting("github_repo");
+  if (!githubConfigured() || !repo) return c.json({ error: "Connect GitHub first" }, 400);
+  const [owner, name] = repo.split("/");
+
+  let reviewer: any;
+  if (reviewer_id) {
+    reviewer = db.query("SELECT * FROM users WHERE id = ?").get(reviewer_id);
+  } else {
+    // Least-loaded eligible reviewer over the last 24h; oldest-assigned breaks ties.
+    const rows = db
+      .query(
+        `SELECT u.*,
+                (SELECT COUNT(*) FROM review_assignments ra WHERE ra.reviewer_id = u.id AND ra.assigned_at >= datetime('now','-1 day')) AS n,
+                COALESCE((SELECT MAX(assigned_at) FROM review_assignments ra WHERE ra.reviewer_id = u.id), '0') AS last_at
+         FROM users u
+         WHERE u.github_login IS NOT NULL AND u.github_login <> ''
+           AND (? IS NULL OR lower(u.github_login) <> lower(?))
+         ORDER BY n ASC, last_at ASC`
+      )
+      .all(exclude_login || null, exclude_login || null) as any[];
+    reviewer = rows[0];
+  }
+  if (!reviewer || !reviewer.github_login) {
+    return c.json({ error: "No eligible reviewer — add team members with GitHub usernames set" }, 400);
+  }
+  try {
+    await requestReviewers(owner, name, pr_number, [reviewer.github_login]);
+    db.query("INSERT INTO review_assignments (pr_number, reviewer_id, reviewer_login) VALUES (?, ?, ?)").run(
+      pr_number,
+      reviewer.id,
+      reviewer.github_login
+    );
+    return c.json({ ok: true, reviewer: { id: reviewer.id, display_name: reviewer.display_name, github_login: reviewer.github_login } });
   } catch (e) {
     const err = e as GitHubError;
     return c.json({ error: err.message }, (err.status as any) || 502);

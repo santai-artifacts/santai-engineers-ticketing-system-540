@@ -71,7 +71,11 @@
           <option value="low">Low</option>
         </select>
       </div>
-      <div id="counts" class="counts"></div>
+      <div class="toolbar-right">
+        <button id="balance-btn" class="btn btn-sm" title="Distribute PR reviews evenly">⚖ Balance reviews</button>
+        <button id="sync-btn" class="btn btn-sm" title="Sync with GitHub PRs">↻ Sync</button>
+        <div id="counts" class="counts"></div>
+      </div>
     </div>
 
     <main id="board" class="board"></main>
@@ -140,6 +144,9 @@
       </div>
       <div class="modal-body">
         <div id="gh-status-box" class="status-box"></div>
+        <label class="field-label">Your GitHub username</label>
+        <input id="gh-login" class="input" placeholder="e.g. octocat" autocomplete="off" />
+        <p class="hint">Used to find pull requests waiting on your review. Saved to your profile.</p>
         <label class="field-label">Target repository</label>
         <input id="gh-repo" class="input" placeholder="owner/repo  (e.g. octocat/hello-world)" />
         <p class="hint">Tickets you push become issues in this repo, and you can import its issues as tickets.</p>
@@ -151,6 +158,33 @@
           <button class="btn" data-close-settings>Close</button>
           <button id="gh-save" class="btn btn-primary">Save repo</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Balance reviews modal -->
+  <div id="balance-modal" class="modal-overlay hidden">
+    <div class="modal modal-lg">
+      <div class="modal-head">
+        <h2>Balance PR reviews</h2>
+        <button class="btn-icon" data-close-balance>✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="balance-toolbar">
+          <div class="seg" id="bal-window">
+            <button data-win="24h" class="seg-btn active">Last 24h</button>
+            <button data-win="7d" class="seg-btn">Last 7 days</button>
+          </div>
+          <p class="hint" style="margin:0">Load counts review requests received — completed <em>and</em> pending — so fast reviewers aren't handed more.</p>
+        </div>
+        <div id="bal-load" class="load-list"></div>
+        <h3 class="section-title">PRs without a reviewer</h3>
+        <div id="bal-candidates" class="cand-list"></div>
+        <p id="bal-error" class="error-text"></p>
+      </div>
+      <div class="modal-foot modal-foot-split">
+        <button id="bal-auto-all" class="btn">⚡ Auto-assign all</button>
+        <button class="btn btn-primary" data-close-balance>Done</button>
       </div>
     </div>
   </div>
