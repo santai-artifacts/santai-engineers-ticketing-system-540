@@ -93,3 +93,11 @@ export async function listIssues(owner: string, repo: string) {
   // Filter out pull requests, which the issues endpoint also returns.
   return issues.filter((i) => !i.pull_request);
 }
+
+// Count PRs matching a search query (uses the Search API's total_count).
+export async function searchPRCount(query: string): Promise<number> {
+  const res = (await gh(`/search/issues?q=${encodeURIComponent(query)}&per_page=1`)) as {
+    total_count?: number;
+  };
+  return res.total_count || 0;
+}

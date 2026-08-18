@@ -9,6 +9,7 @@ import {
   listIssues,
   listOpenPRs,
   requestReviewers,
+  searchPRCount,
   GitHubError,
 } from "./github";
 
@@ -407,30 +408,92 @@ app.get("/api/github/sync", async (c) => {
 });
 
 // Review load per member + PRs that currently have no reviewer.
+// "Load" reflects REAL GitHub review workload: open review requests still
+// pending on a member, plus reviews they've submitted within the window.
+// Falls back to in-app assignment history when GitHub is unreachable.
 app.get("/api/reviews/load", async (c) => {
   const w = c.req.query("window") === "7d" ? "7d" : "24h";
   const since = w === "7d" ? "-7 days" : "-1 day";
-  const load = db
-    .query(
-      `SELECT u.id, u.display_name, u.color, u.github_login,
-              (SELECT COUNT(*) FROM review_assignments ra
-               WHERE ra.reviewer_id = u.id AND ra.assigned_at >= datetime('now', ?)) AS count
-       FROM users u ORDER BY count DESC, u.display_name`
-    )
-    .all(since) as any[];
+  const days = w === "7d" ? 7 : 1;
 
-  let candidates: any[] = [];
+  const users = db
+    .query("SELECT id, display_name, color, github_login FROM users ORDER BY display_name")
+    .all() as any[];
+
   const repo = getSetting("github_repo");
-  if (githubConfigured() && repo) {
-    const [owner, name] = repo.split("/");
-    try {
-      const prs = await listOpenPRs(owner, name);
-      candidates = prs
-        .filter((p) => !(p.requested_reviewers || []).length)
-        .map((p) => ({ number: p.number, title: p.title, url: p.html_url, author: p.user?.login, draft: p.draft }));
-    } catch {}
+  const connected = githubConfigured() && !!repo;
+
+  const localCount = (id: number) =>
+    (db
+      .query(
+        "SELECT COUNT(*) AS n FROM review_assignments WHERE reviewer_id = ? AND assigned_at >= datetime('now', ?)"
+      )
+      .get(id, since) as any).n as number;
+
+  // Default (disconnected) response uses in-app assignment history.
+  const localLoad = () =>
+    users
+      .map((u) => ({ ...u, pending: 0, completed: 0, count: localCount(u.id) }))
+      .sort((a, b) => b.count - a.count || a.display_name.localeCompare(b.display_name));
+
+  if (!connected) {
+    return c.json({ window: w, load: localLoad(), candidates: [], connected, repo, source: "local", noOpenPRs: false });
   }
-  return c.json({ window: w, load, candidates, connected: githubConfigured(), repo });
+
+  const [owner, name] = repo!.split("/");
+  const slug = `${owner}/${name}`;
+  try {
+    const prs = await listOpenPRs(owner, name);
+    const candidates = prs
+      // No individual reviewer AND no team review request → genuinely uncovered.
+      .filter((p) => !(p.requested_reviewers || []).length && !(p.requested_teams || []).length)
+      .map((p) => ({ number: p.number, title: p.title, url: p.html_url, author: p.user?.login, draft: p.draft }));
+
+    // GitHub search date qualifier is YYYY-MM-DD.
+    const sinceDate = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+    let warning: string | null = null;
+
+    const load = await Promise.all(
+      users.map(async (u) => {
+        if (!u.github_login) return { ...u, pending: 0, completed: 0, count: 0 };
+        try {
+          const [pending, completed] = await Promise.all([
+            searchPRCount(`repo:${slug} is:pr is:open review-requested:${u.github_login}`),
+            searchPRCount(`repo:${slug} is:pr reviewed-by:${u.github_login} updated:>=${sinceDate}`),
+          ]);
+          return { ...u, pending, completed, count: pending + completed };
+        } catch (e) {
+          warning = "Couldn't read live review counts from GitHub (rate limit or token scope). Showing 0 for affected members.";
+          return { ...u, pending: 0, completed: 0, count: 0 };
+        }
+      })
+    );
+    load.sort((a, b) => b.count - a.count || a.display_name.localeCompare(b.display_name));
+
+    return c.json({
+      window: w,
+      load,
+      candidates,
+      connected,
+      repo,
+      source: "github",
+      noOpenPRs: prs.length === 0,
+      warning,
+    });
+  } catch (e) {
+    const err = e as GitHubError;
+    // GitHub unreachable — degrade to in-app history, but say so.
+    return c.json({
+      window: w,
+      load: localLoad(),
+      candidates: [],
+      connected,
+      repo,
+      source: "local",
+      noOpenPRs: false,
+      warning: `GitHub unavailable (${err.message}). Showing in-app assignments only.`,
+    });
+  }
 });
 
 // Assign a reviewer to a PR: least-loaded eligible member unless one is named.
